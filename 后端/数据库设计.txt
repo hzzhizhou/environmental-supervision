@@ -1,0 +1,422 @@
+数据库详细设计（10张表）
+数据库基本信息
+数据库名称：epm_db
+
+字符集：utf8mb4（支持emoji和中文）
+
+排序规则：utf8mb4_unicode_ci
+
+1. 角色表 roles
+存储系统支持的角色类型，用于权限控制。
+
+字段	类型	约束	说明
+role_id	INT	PRIMARY KEY AUTO_INCREMENT	角色唯一标识
+role_name	VARCHAR(20)	NOT NULL	角色显示名称，如“系统管理员”
+role_code	VARCHAR(20)	NOT NULL UNIQUE	角色代码，用于程序判断：ADMIN, WORKER, PUBLIC, DECIDER
+created_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	记录创建时间
+业务说明：
+
+角色代码固定，不可动态修改（否则影响权限判断）。
+
+一个用户可以拥有一个角色（本项目不涉及多角色）。
+
+sql
+CREATE TABLE `roles` (
+  `role_id` INT NOT NULL AUTO_INCREMENT COMMENT '角色唯一标识，主键',
+  `role_name` VARCHAR(20) NOT NULL COMMENT '角色名称，如“系统管理员”、“网格员”',
+  `role_code` VARCHAR(20) NOT NULL COMMENT '角色代码：ADMIN（系统管理员）、WORKER（网格员）、PUBLIC（公众监督员）、DECIDER（决策者）',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`role_id`),
+  UNIQUE KEY `uk_role_code` (`role_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色表，定义系统用户角色';
+2. 网格表 grids
+存储环保监督的网格区域信息，每个网格对应一个地理范围（省市区）。
+
+字段	类型	约束	说明
+grid_id	INT	PRIMARY KEY AUTO_INCREMENT	网格唯一标识
+grid_code	VARCHAR(30)	NOT NULL UNIQUE	网格编码，如 GRID-001，便于人工识别
+grid_name	VARCHAR(50)	NOT NULL	网格名称，如“和平区网格1”
+province	VARCHAR(30)	NOT NULL	省份名称，如“辽宁省”
+city	VARCHAR(30)	NOT NULL	城市名称，如“沈阳市”
+district	VARCHAR(30)	可为空	区/县名称，如“和平区”
+status	TINYINT	DEFAULT 1	网格状态：1 启用（可被选择），0 禁用（不可见）
+created_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	创建时间
+业务说明：
+
+公众上报时，系统根据选择的省市区自动匹配 grid_id（省市区完全一致）。
+
+网格员必须归属于一个网格（users.grid_id 引用此表）。
+
+sql
+CREATE TABLE `grids` (
+  `grid_id` INT NOT NULL AUTO_INCREMENT COMMENT '网格唯一标识，主键',
+  `grid_code` VARCHAR(30) NOT NULL COMMENT '网格编码，例如 GRID-001，唯一标识一个网格',
+  `grid_name` VARCHAR(50) NOT NULL COMMENT '网格名称，例如“和平区网格1”',
+  `province` VARCHAR(30) NOT NULL COMMENT '省份名称，例如“辽宁省”',
+  `city` VARCHAR(30) NOT NULL COMMENT '城市名称，例如“沈阳市”',
+  `district` VARCHAR(30) DEFAULT NULL COMMENT '区/县名称，例如“和平区”',
+  `status` TINYINT DEFAULT 1 COMMENT '网格状态：1-启用（公众可选择），0-禁用（不显示）',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`grid_id`),
+  UNIQUE KEY `uk_grid_code` (`grid_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='网格表，存储环保监督的地理网格区域';
+3. 用户表 users
+存储所有系统用户，包括公众监督员、网格员、系统管理员、决策者。通过 role_id 区分角色。
+
+字段	类型	约束	说明
+user_id	INT	PRIMARY KEY AUTO_INCREMENT	用户唯一标识
+username	VARCHAR(50)	NOT NULL UNIQUE	登录账号，唯一
+password	VARCHAR(255)	NOT NULL	加密密码（BCrypt 加密）
+real_name	VARCHAR(30)	可为空	真实姓名
+phone	VARCHAR(11)	NOT NULL UNIQUE	手机号，唯一，用于登录和接收通知
+role_id	INT	NOT NULL	外键，关联 roles.role_id，标识用户角色
+grid_id	INT	可为空	外键，关联 grids.grid_id，仅网格员需要填写，表示其归属网格
+avatar_url	VARCHAR(255)	可为空	头像图片 URL
+allow_cross_region	TINYINT	DEFAULT 0	仅网格员使用：是否允许跨区域接受任务（0-不允许，1-允许）。用于异地指派
+status	TINYINT	DEFAULT 1	账号状态：1 启用，0 禁用（被禁用用户无法登录）
+last_login_at	TIMESTAMP	可为空	最后一次登录时间，用于统计活跃用户
+created_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	注册时间
+业务说明：
+
+公众监督员：role_id=3，grid_id 为空，allow_cross_region 无效。
+
+网格员：role_id=2，必须填写 grid_id，allow_cross_region 可选。
+
+系统管理员：role_id=1，grid_id 为空。
+
+决策者：role_id=4，grid_id 为空。
+
+sql
+CREATE TABLE `users` (
+  `user_id` INT NOT NULL AUTO_INCREMENT COMMENT '用户唯一标识，主键',
+  `username` VARCHAR(50) NOT NULL COMMENT '登录账号，全局唯一',
+  `password` VARCHAR(255) NOT NULL COMMENT '加密后的密码',
+  `real_name` VARCHAR(30) DEFAULT NULL COMMENT '真实姓名（可选）',
+  `phone` VARCHAR(11) NOT NULL COMMENT '手机号码，全局唯一，用于登录和接收短信',
+  `role_id` INT NOT NULL COMMENT '角色ID，关联 roles 表，决定用户权限',
+  `grid_id` INT DEFAULT NULL COMMENT '网格ID，关联 grids 表，仅网格员角色需要填写，表示管辖区域',
+  `avatar_url` VARCHAR(255) DEFAULT NULL COMMENT '头像图片地址',
+  `allow_cross_region` TINYINT DEFAULT 0 COMMENT '是否允许接受异地任务：0-不允许，1-允许。仅网格员使用',
+  `status` TINYINT DEFAULT 1 COMMENT '账号状态：1-正常，0-禁用（禁用后无法登录）',
+  `last_login_at` TIMESTAMP NULL COMMENT '最后登录时间，用于统计用户活跃度',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '账号注册时间',
+  PRIMARY KEY (`user_id`),
+  UNIQUE KEY `uk_username` (`username`),
+  UNIQUE KEY `uk_phone` (`phone`),
+  KEY `idx_role_id` (`role_id`),
+  KEY `idx_grid_id` (`grid_id`),
+  FOREIGN KEY (`role_id`) REFERENCES `roles` (`role_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  FOREIGN KEY (`grid_id`) REFERENCES `grids` (`grid_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表，存储所有角色用户（公众、网格员、管理员、决策者）';
+4. 短信验证码表 sms_logs
+存储发送的短信验证码，用于注册和登录验证。
+
+字段	类型	约束	说明
+sms_id	INT	PRIMARY KEY AUTO_INCREMENT	记录唯一标识
+phone	VARCHAR(11)	NOT NULL	接收验证码的手机号
+code	VARCHAR(6)	NOT NULL	6位数字验证码
+type	VARCHAR(20)	NOT NULL	验证码用途：register（注册）、login（登录）、reset（重置密码）
+is_used	TINYINT	DEFAULT 0	是否已被使用：0 未使用，1 已使用
+expired_at	TIMESTAMP	NOT NULL	过期时间（通常为发送时间后5分钟）
+created_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	发送时间
+业务说明：
+
+同一手机号、同一类型、未过期的验证码，在发送后5分钟内有效。
+
+验证码使用后立即标记 is_used=1，防止重复使用。
+
+定时任务可清理已过期记录。
+
+sql
+CREATE TABLE `sms_logs` (
+  `sms_id` INT NOT NULL AUTO_INCREMENT COMMENT '短信记录唯一标识',
+  `phone` VARCHAR(11) NOT NULL COMMENT '接收验证码的手机号',
+  `code` VARCHAR(6) NOT NULL COMMENT '6位数字验证码',
+  `type` VARCHAR(20) NOT NULL COMMENT '验证码类型：register（注册）、login（登录）、reset（重置密码）',
+  `is_used` TINYINT DEFAULT 0 COMMENT '是否已使用：0-未使用，1-已使用（防止重复验证）',
+  `expired_at` TIMESTAMP NOT NULL COMMENT '验证码过期时间，通常为发送时间+5分钟',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '验证码发送时间',
+  PRIMARY KEY (`sms_id`),
+  KEY `idx_phone_code` (`phone`, `code`),
+  KEY `idx_expired` (`expired_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='短信验证码记录表，用于用户注册、登录等场景的验证码校验';
+5. 公众AQI上报表 aqi_reports
+存储公众监督员提交的空气质量反馈信息。
+
+字段	类型	约束	说明
+report_id	INT	PRIMARY KEY AUTO_INCREMENT	上报记录唯一标识
+report_code	VARCHAR(30)	NOT NULL UNIQUE	上报编号，规则：AQI-年月日-序号，如 AQI-20260603-001，便于人工追溯
+user_id	INT	NOT NULL	上报人ID，关联 users.user_id（必须是公众角色）
+aqi_value	INT	NOT NULL	AQI数值（0-500）
+aqi_level	VARCHAR(20)	NOT NULL	AQI等级：优、良、轻度污染、中度污染、重度污染
+province	VARCHAR(30)	NOT NULL	省份名称
+city	VARCHAR(30)	NOT NULL	城市名称
+address	VARCHAR(200)	可为空	详细地址（街道、门牌号）
+grid_id	INT	可为空	系统自动匹配的网格ID（根据省市区匹配 grids 表）
+status	VARCHAR(20)	DEFAULT 'pending'	处理状态：pending（待指派）、assigned（已指派网格员）、detected（网格员已提交实测）、confirmed（管理员已确认）
+remark	VARCHAR(500)	可为空	用户填写的污染描述文本
+pm25	DECIMAL(8,2)	可为空	PM2.5浓度（μg/m³）
+pm10	DECIMAL(8,2)	可为空	PM10浓度（μg/m³）
+o3	DECIMAL(8,2)	可为空	臭氧浓度（μg/m³）
+so2	DECIMAL(8,2)	可为空	二氧化硫浓度（μg/m³）
+no2	DECIMAL(8,2)	可为空	二氧化氮浓度（μg/m³）
+co	DECIMAL(8,2)	可为空	一氧化碳浓度（mg/m³）
+reported_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	上报时间（用户提交的时刻）
+confirmed_at	TIMESTAMP	可为空	管理员确认实测数据的时间（即最终确认时间）
+业务说明：
+
+status 流转：pending → assigned → detected → confirmed。
+
+grid_id 在插入时根据省市区自动计算（如果匹配不到可为空，后续管理员可手动调整）。
+
+污染物字段为可选，用户可能不填。
+
+sql
+CREATE TABLE `aqi_reports` (
+  `report_id` INT NOT NULL AUTO_INCREMENT COMMENT '上报记录ID，主键',
+  `report_code` VARCHAR(30) NOT NULL COMMENT '上报编号，格式 AQI-年月日-序号，例如 AQI-20260603-001，用于人工查询',
+  `user_id` INT NOT NULL COMMENT '公众监督员ID，关联 users.user_id',
+  `aqi_value` INT NOT NULL COMMENT 'AQI数值，范围 0-500',
+  `aqi_level` VARCHAR(20) NOT NULL COMMENT 'AQI等级：优、良、轻度污染、中度污染、重度污染',
+  `province` VARCHAR(30) NOT NULL COMMENT '省份名称，例如“辽宁省”',
+  `city` VARCHAR(30) NOT NULL COMMENT '城市名称，例如“沈阳市”',
+  `address` VARCHAR(200) DEFAULT NULL COMMENT '详细地址（街道、门牌号等）',
+  `grid_id` INT DEFAULT NULL COMMENT '系统自动匹配的网格ID，关联 grids.grid_id，用于任务指派',
+  `status` VARCHAR(20) DEFAULT 'pending' COMMENT '处理状态：pending（待指派）、assigned（已指派网格员）、detected（网格员已提交实测）、confirmed（管理员已确认）',
+  `remark` VARCHAR(500) DEFAULT NULL COMMENT '用户填写的污染描述或备注',
+  `pm25` DECIMAL(8,2) DEFAULT NULL COMMENT 'PM2.5浓度（μg/m³），可选',
+  `pm10` DECIMAL(8,2) DEFAULT NULL COMMENT 'PM10浓度（μg/m³），可选',
+  `o3` DECIMAL(8,2) DEFAULT NULL COMMENT '臭氧浓度（μg/m³），可选',
+  `so2` DECIMAL(8,2) DEFAULT NULL COMMENT '二氧化硫浓度（μg/m³），可选',
+  `no2` DECIMAL(8,2) DEFAULT NULL COMMENT '二氧化氮浓度（μg/m³），可选',
+  `co` DECIMAL(8,2) DEFAULT NULL COMMENT '一氧化碳浓度（mg/m³），可选',
+  `reported_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '上报时间（用户提交的时刻）',
+  `confirmed_at` TIMESTAMP NULL COMMENT '最终确认时间（管理员确认实测数据的时间）',
+  PRIMARY KEY (`report_id`),
+  UNIQUE KEY `uk_report_code` (`report_code`),
+  KEY `idx_user_id` (`user_id`),
+  KEY `idx_status_grid` (`status`, `grid_id`),
+  KEY `idx_reported_at` (`reported_at`),
+  FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  FOREIGN KEY (`grid_id`) REFERENCES `grids` (`grid_id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='公众AQI上报表，记录公众监督员提交的空气质量反馈信息';
+6. 指派任务表 task_assignments
+记录管理员将公众上报指派给网格员的每一次任务。
+
+字段	类型	约束	说明
+task_id	INT	PRIMARY KEY AUTO_INCREMENT	任务唯一标识
+report_id	INT	NOT NULL UNIQUE	关联的公众上报ID（一个上报只能被指派一次）
+admin_id	INT	NOT NULL	执行指派的管理员ID（关联 users.user_id）
+worker_id	INT	NOT NULL	被指派的网格员ID（关联 users.user_id，必须为网格员角色）
+assign_time	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	指派时间
+deadline	DATETIME	可为空	要求网格员完成的截止时间（可选）
+status	VARCHAR(20)	DEFAULT 'assigned'	任务状态：assigned（已指派）、completed（网格员已完成实测）、rejected（管理员驳回，需要重新指派）
+reject_reason	VARCHAR(255)	可为空	若任务被驳回，记录驳回原因
+业务说明：
+
+一个上报只能被指派一次，通过 report_id 唯一约束保证。
+
+任务创建后，网格员可在其任务列表中看到。
+
+网格员提交实测数据后，任务状态变为 completed。
+
+如果管理员驳回网格员的实测数据，任务状态可能变为 rejected，需要重新指派（或保留原任务）。
+
+sql
+CREATE TABLE `task_assignments` (
+  `task_id` INT NOT NULL AUTO_INCREMENT COMMENT '任务ID，主键',
+  `report_id` INT NOT NULL COMMENT '关联的公众上报ID，对应 aqi_reports.report_id，一个上报只能被指派一次',
+  `admin_id` INT NOT NULL COMMENT '指派人（系统管理员）ID，关联 users.user_id',
+  `worker_id` INT NOT NULL COMMENT '被指派的网格员ID，关联 users.user_id',
+  `assign_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '指派时间',
+  `deadline` DATETIME DEFAULT NULL COMMENT '要求完成的截止时间（可选）',
+  `status` VARCHAR(20) DEFAULT 'assigned' COMMENT '任务状态：assigned（已指派）、completed（网格员已完成实测）、rejected（管理员驳回，需重新处理）',
+  `reject_reason` VARCHAR(255) DEFAULT NULL COMMENT '若任务被驳回，记录驳回原因',
+  PRIMARY KEY (`task_id`),
+  UNIQUE KEY `uk_report_id` (`report_id`),
+  KEY `idx_worker_id` (`worker_id`),
+  FOREIGN KEY (`report_id`) REFERENCES `aqi_reports` (`report_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  FOREIGN KEY (`admin_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  FOREIGN KEY (`worker_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='指派任务表，记录管理员将公众上报指派给网格员的任务信息';
+7. 实测数据表 detect_data
+存储网格员现场检测后提交的实测空气质量数据。
+
+字段	类型	约束	说明
+detect_id	INT	PRIMARY KEY AUTO_INCREMENT	实测记录唯一标识
+task_id	INT	NOT NULL UNIQUE	关联的指派任务ID（一个任务对应一条实测记录）
+worker_id	INT	NOT NULL	执行检测的网格员ID（关联 users.user_id）
+detect_time	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	检测时间（网格员提交的时刻）
+aqi_value	INT	NOT NULL	实测AQI数值
+aqi_level	VARCHAR(20)	NOT NULL	实测AQI等级
+pm25	DECIMAL(8,2)	可为空	PM2.5实测值
+pm10	DECIMAL(8,2)	可为空	PM10实测值
+o3	DECIMAL(8,2)	可为空	臭氧实测值
+so2	DECIMAL(8,2)	可为空	二氧化硫实测值
+no2	DECIMAL(8,2)	可为空	二氧化氮实测值
+co	DECIMAL(8,2)	可为空	一氧化碳实测值
+photos	VARCHAR(1000)	可为空	现场照片URL列表，存储为JSON数组，如 ["url1","url2"]
+confirm_status	TINYINT	DEFAULT 0	管理员确认状态：0 待确认，1 已确认（数据有效），2 驳回（数据无效）
+confirm_note	VARCHAR(255)	可为空	管理员驳回时的备注说明
+confirmed_at	TIMESTAMP	可为空	管理员确认（或驳回）的时间
+业务说明：
+
+一条指派任务只能提交一条实测记录（task_id 唯一）。
+
+网格员提交后，confirm_status=0，等待管理员审核。
+
+管理员确认通过后，confirm_status=1，并记录 confirmed_at，同时更新 aqi_reports.status='confirmed'。
+
+若驳回，confirm_status=2，任务可能需要重新指派。
+
+sql
+CREATE TABLE `detect_data` (
+  `detect_id` INT NOT NULL AUTO_INCREMENT COMMENT '实测数据ID，主键',
+  `task_id` INT NOT NULL COMMENT '关联的指派任务ID，对应 task_assignments.task_id，一个任务仅有一条实测记录',
+  `worker_id` INT NOT NULL COMMENT '执行检测的网格员ID，关联 users.user_id',
+  `detect_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '检测提交时间',
+  `aqi_value` INT NOT NULL COMMENT '实测AQI数值',
+  `aqi_level` VARCHAR(20) NOT NULL COMMENT '实测AQI等级：优、良、轻度污染、中度污染、重度污染',
+  `pm25` DECIMAL(8,2) DEFAULT NULL COMMENT 'PM2.5实测值（μg/m³）',
+  `pm10` DECIMAL(8,2) DEFAULT NULL COMMENT 'PM10实测值（μg/m³）',
+  `o3` DECIMAL(8,2) DEFAULT NULL COMMENT '臭氧实测值（μg/m³）',
+  `so2` DECIMAL(8,2) DEFAULT NULL COMMENT '二氧化硫实测值（μg/m³）',
+  `no2` DECIMAL(8,2) DEFAULT NULL COMMENT '二氧化氮实测值（μg/m³）',
+  `co` DECIMAL(8,2) DEFAULT NULL COMMENT '一氧化碳实测值（mg/m³）',
+  `photos` VARCHAR(1000) DEFAULT NULL COMMENT '现场照片URL列表，JSON数组格式，例如 ["http://.../1.jpg","http://.../2.jpg"]',
+  `confirm_status` TINYINT DEFAULT 0 COMMENT '管理员确认状态：0-待确认，1-已确认（数据有效），2-驳回（数据无效）',
+  `confirm_note` VARCHAR(255) DEFAULT NULL COMMENT '管理员驳回时的备注说明',
+  `confirmed_at` TIMESTAMP NULL COMMENT '管理员确认（或驳回）的时间',
+  PRIMARY KEY (`detect_id`),
+  UNIQUE KEY `uk_task_id` (`task_id`),
+  KEY `idx_worker_id` (`worker_id`),
+  KEY `idx_confirm_status` (`confirm_status`),
+  FOREIGN KEY (`task_id`) REFERENCES `task_assignments` (`task_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  FOREIGN KEY (`worker_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='实测数据表，存储网格员现场检测提交的AQI实测数据';
+8. 附件表 attachments
+统一存储公众上报和网格员检测时上传的图片附件。
+
+字段	类型	约束	说明
+attach_id	INT	PRIMARY KEY AUTO_INCREMENT	附件唯一标识
+report_id	INT	可为空	关联的公众上报ID（如果附件属于上报）
+detect_id	INT	可为空	关联的实测数据ID（如果附件属于实测）
+file_url	VARCHAR(500)	NOT NULL	附件存储的URL或本地路径
+file_type	VARCHAR(20)	DEFAULT 'image'	文件类型（目前仅支持 image）
+upload_type	VARCHAR(20)	NOT NULL	上传来源：report（公众上报）、detect（网格员检测）
+uploaded_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	上传时间
+业务说明：
+
+每条附件必须关联一个 report_id 或 detect_id（不能同时为空，可通过 CHECK 约束或应用逻辑保证）。
+
+一个上报可以有多张图片（1对多），一个实测也可以有多张图片。
+
+file_url 建议存储相对路径或可访问的URL。
+
+sql
+CREATE TABLE `attachments` (
+  `attach_id` INT NOT NULL AUTO_INCREMENT COMMENT '附件ID，主键',
+  `report_id` INT DEFAULT NULL COMMENT '关联的公众上报ID，若附件来自公众上报则填写',
+  `detect_id` INT DEFAULT NULL COMMENT '关联的实测数据ID，若附件来自网格员检测则填写',
+  `file_url` VARCHAR(500) NOT NULL COMMENT '附件存储的URL或服务器路径',
+  `file_type` VARCHAR(20) DEFAULT 'image' COMMENT '文件类型，如 image、video（本项目暂只支持图片）',
+  `upload_type` VARCHAR(20) NOT NULL COMMENT '上传类型：report（公众上报）、detect（网格员检测）',
+  `uploaded_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
+  PRIMARY KEY (`attach_id`),
+  KEY `idx_report_id` (`report_id`),
+  KEY `idx_detect_id` (`detect_id`),
+  FOREIGN KEY (`report_id`) REFERENCES `aqi_reports` (`report_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (`detect_id`) REFERENCES `detect_data` (`detect_id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='附件表，存储公众上报和网格员检测时上传的图片文件';
+9. 审核记录表 audit_logs
+记录管理员对网格员提交的实测数据进行确认或驳回的操作日志。
+
+字段	类型	约束	说明
+audit_id	INT	PRIMARY KEY AUTO_INCREMENT	审核记录唯一标识
+detect_id	INT	NOT NULL	关联的实测数据ID（detect_data.detect_id）
+auditor_id	INT	NOT NULL	执行审核的管理员ID（关联 users.user_id）
+action	VARCHAR(20)	NOT NULL	审核动作：confirm（确认通过）、reject（驳回）
+result	TEXT	可为空	审核备注，驳回时填写原因，确认时可为空或填写评语
+audited_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP	审核时间
+业务说明：
+
+每次对实测数据的确认或驳回均产生一条记录，用于追溯。
+
+审核后可能触发状态变更（detect_data.confirm_status 更新）。
+
+此表可用于生成管理员的工作量统计。
+
+sql
+CREATE TABLE `audit_logs` (
+  `audit_id` INT NOT NULL AUTO_INCREMENT COMMENT '审核记录ID，主键',
+  `detect_id` INT NOT NULL COMMENT '实测数据ID，关联 detect_data.detect_id',
+  `auditor_id` INT NOT NULL COMMENT '审核人（管理员）ID，关联 users.user_id',
+  `action` VARCHAR(20) NOT NULL COMMENT '审核动作：confirm（确认通过）、reject（驳回）',
+  `result` TEXT COMMENT '审核备注，驳回时填写具体原因，确认时可为空',
+  `audited_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '审核时间',
+  PRIMARY KEY (`audit_id`),
+  KEY `idx_detect_id` (`detect_id`),
+  FOREIGN KEY (`detect_id`) REFERENCES `detect_data` (`detect_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  FOREIGN KEY (`auditor_id`) REFERENCES `users` (`user_id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审核记录表，记录管理员对实测数据的确认或驳回操作';
+10. 统计汇总表 statistics
+存储按月、按省/市预聚合的统计数据，用于快速展示决策者大屏，避免实时计算压力。
+
+字段	类型	约束	说明
+stat_id	INT	PRIMARY KEY AUTO_INCREMENT	统计记录唯一标识
+province	VARCHAR(30)	NOT NULL	省份名称
+city	VARCHAR(30)	可为空	城市名称（如果为NULL表示全省汇总）
+stat_month	VARCHAR(7)	NOT NULL	统计月份，格式 YYYY-MM，如 2026-06
+total_reports	INT	DEFAULT 0	该月该区域公众上报总数
+confirmed_count	INT	DEFAULT 0	最终被管理员确认的实测数据条数（有效数据）
+rejected_count	INT	DEFAULT 0	被管理员驳回的实测数据条数
+avg_aqi	DECIMAL(6,2)	可为空	该月该区域实测AQI平均值（仅计算已确认的数据）
+max_aqi	INT	可为空	该月该区域实测AQI最大值
+min_aqi	INT	可为空	该月该区域实测AQI最小值
+excellent_days	INT	DEFAULT 0	该月该区域AQI等级为“优”的天数
+good_days	INT	DEFAULT 0	等级为“良”的天数
+light_pollution_days	INT	DEFAULT 0	等级为“轻度污染”的天数
+moderate_pollution_days	INT	DEFAULT 0	等级为“中度污染”的天数
+heavy_pollution_days	INT	DEFAULT 0	等级为“重度污染”的天数
+updated_at	TIMESTAMP	DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP	统计记录最后更新时间（自动更新）
+业务说明：
+
+此表数据由定时任务（如每天凌晨）根据 detect_data 表（confirm_status=1）和 aqi_reports 表重新计算，覆盖或插入。
+
+决策者端的大屏数据优先从此表读取，提高查询效率。
+
+city 为 NULL 的记录表示全省汇总，城市级统计时 city 有值。
+
+sql
+CREATE TABLE `statistics` (
+  `stat_id` INT NOT NULL AUTO_INCREMENT COMMENT '统计记录ID，主键',
+  `province` VARCHAR(30) NOT NULL COMMENT '省份名称，例如“辽宁省”',
+  `city` VARCHAR(30) DEFAULT NULL COMMENT '城市名称，若为NULL表示该记录为全省汇总统计',
+  `stat_month` VARCHAR(7) NOT NULL COMMENT '统计月份，格式 YYYY-MM，例如 2026-06',
+  `total_reports` INT DEFAULT 0 COMMENT '该月该区域公众上报总数',
+  `confirmed_count` INT DEFAULT 0 COMMENT '该月该区域最终被管理员确认的实测数据条数（有效数据）',
+  `rejected_count` INT DEFAULT 0 COMMENT '该月该区域被管理员驳回的实测数据条数',
+  `avg_aqi` DECIMAL(6,2) DEFAULT NULL COMMENT '该月该区域实测AQI平均值（仅包含已确认数据）',
+  `max_aqi` INT DEFAULT NULL COMMENT '该月该区域实测AQI最大值',
+  `min_aqi` INT DEFAULT NULL COMMENT '该月该区域实测AQI最小值',
+  `excellent_days` INT DEFAULT 0 COMMENT 'AQI等级为“优”的天数',
+  `good_days` INT DEFAULT 0 COMMENT 'AQI等级为“良”的天数',
+  `light_pollution_days` INT DEFAULT 0 COMMENT 'AQI等级为“轻度污染”的天数',
+  `moderate_pollution_days` INT DEFAULT 0 COMMENT 'AQI等级为“中度污染”的天数',
+  `heavy_pollution_days` INT DEFAULT 0 COMMENT 'AQI等级为“重度污染”的天数',
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后一次更新时间',
+  PRIMARY KEY (`stat_id`),
+  UNIQUE KEY `uk_city_month` (`province`, `city`, `stat_month`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='统计汇总表，按月预聚合AQI数据，供决策者大屏使用';
+附录：表关系图（简化）
+text
+roles (角色)
+  └─ users (用户) ──────┐
+                          │
+grids (网格) ────────────┘
+  │
+  └─ aqi_reports (公众上报) ──┬─ attachments (附件)
+                               └─ task_assignments (指派任务) ── detect_data (实测数据) ──┬─ attachments
+                                                                                         └─ audit_logs (审核记录)
+statistics (统计汇总) 独立，由定时任务维护
+sms_logs (验证码) 独立
